@@ -1,0 +1,45 @@
+# Production deployment of mlat-server-rs. Configure it in .env (copy example.env).
+#
+#   cp example.env .env && $EDITOR .env
+#   docker compose build
+#   docker compose up -d
+#
+# Clients keep connecting to the same TCP port as before; readsb keeps reading
+# the Basestation output ports. Nothing about either side needs to change.
+services:
+  mlat-server:
+    build: .
+    image: ${MLAT_IMAGE:-mlat-server-rs:local}
+    container_name: ${MLAT_CONTAINER_NAME:-mlat-server}
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # receivers (JSON protocol); the UDP port only carries traffic if
+      # MLAT_CLIENT_LISTEN names a UDP port, e.g. 31090:31090
+      - "${MLAT_CLIENT_PORT:-31090}:31090/tcp"
+      - "${MLAT_CLIENT_PORT:-31090}:31090/udp"
+      # Basestation output: Kalman-filtered (for readsb) and raw
+      - "${MLAT_FILTERED_PORT:-31003}:31003/tcp"
+      - "${MLAT_UNFILTERED_PORT:-31004}:31004/tcp"
+    volumes:
+      # sync.json, clients.json, aircraft.json, positions.csv, handshakes.log
+      - ${MLAT_WORK_DIR:-./work}:/run/mlat-server
+    # the whole point of this server: use as many cores as there are
+    deploy:
+      resources:
+        limits:
+          cpus: ${MLAT_CPUS:-4}
+    ulimits:
+      nofile: 65536
+    healthcheck:
+      # sync.json is rewritten every 15 s while the server is healthy
+      test: ["CMD-SHELL", "test $$(( $$(date +%s) - $$(stat -c %Y /run/mlat-server/sync.json) )) -lt 90"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
